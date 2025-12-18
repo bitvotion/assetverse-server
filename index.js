@@ -42,16 +42,16 @@ async function run() {
     const paymentCollection = db.collection('payments')
 
     // -----Middlewares-----
-    
+
     // VerifyToken 
     const verifyToken = (req, res, next) => {
-      if(!req.headers.authorization) {
-        return res.status(401).send({message: 'unauthorized access'})
+      if (!req.headers.authorization) {
+        return res.status(401).send({ message: 'unauthorized access' })
       }
       const token = req.headers.authorization.split(' ')[1]
-      jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded)=>{
-        if(err){
-          return res.status(401).send({message: 'unauthorized access'})
+      jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+        if (err) {
+          return res.status(401).send({ message: 'unauthorized access' })
         }
         req.decoded = decoded
         next()
@@ -59,12 +59,12 @@ async function run() {
     }
 
     // Verify HR 
-    const verifyHR = async(req, res, next)=>{
+    const verifyHR = async (req, res, next) => {
       const email = req.decoded.email
-      const query = {email: email}
+      const query = { email: email }
       const user = await usersCollection.findOne(query)
       const isHR = user?.role === 'hr'
-      if(!isHR) {
+      if (!isHR) {
         return res.status(403).send({ message: 'forbidden access' })
       }
       next()
@@ -80,7 +80,7 @@ async function run() {
     });
 
     // Role checking ----VERIFYTOKEN Add korte hobe
-    app.get('/users/role/:email', async(req, res)=> {
+    app.get('/users/role/:email', async (req, res) => {
       const email = req.params.email
 
       // if(email !== req.decoded.email){
@@ -88,32 +88,71 @@ async function run() {
       //   )
       // }
 
-      const query = {email: email}
-      const user = await usersCollection.findOne(query, {projection: {role: 1, _id: 0}})
+      const query = { email: email }
+      const user = await usersCollection.findOne(query, { projection: { role: 1, _id: 0 } })
 
-      res.send({role: user?.role})
+      res.send({ role: user?.role })
     })
 
     // Get users profile
     app.get('/users/:email', async (req, res) => {
       const email = req.params.email
-      const query = {email: email}
+      const query = { email: email }
       const result = await usersCollection.findOne(query)
       res.send(result)
     })
 
     // Update user profile
-    app.patch('/users/:email', async(req,res)=>{
+    app.patch('/users/:email', async (req, res) => {
       const email = req.params.email
       const updates = req.body
-      const query = {email: email}
+      const query = { email: email }
       const updatedDoc = {
-        $set: {...updates}
+        $set: { ...updates }
       }
       const result = await usersCollection.updateOne(query, updatedDoc)
       res.send(result)
     })
 
+    // ASSETS API 
+
+    // Add asset hr only
+    app.post('/assets', async (req, res) => {
+      const asset = req.body
+      asset.dateAdded = new Date()
+      asset.productQuantity = parseInt(asset.productQuantity)
+      const result = await assetsCollection.insertOne(asset)
+    })
+
+    // Get Assets with filtered, search, pagination
+    app.get('/assets', async (req, res) => {
+      const email = req.query.email
+      const search = req.query.search || ""
+      const filterType = req.query.filter || ""
+      const sortOrder = req.query.sort || ""
+
+      let query = {
+        hrEmail: email,
+        productName: { $regex: search, $options: 'i' }
+      }
+
+      if (filterType) {
+        query.productType = filterType
+      }
+
+      // Pagination
+      const page = parseInt(req.query.page) || 0
+      const limit = parseInt(req.query.limit) || 0
+      const skip = page * limit
+
+      let options = {}
+      if (sortOrder === 'asc') options.sort = { productQuantity: 1 }
+      if (sortOrder === 'desc') options.sort = { productQuantity: -1 }
+
+      const cursor = assetsCollection.find(query, options).skip(skip).limit(limit)
+      const result = await cursor.toArray()
+      res.send(result);
+    })
 
 
 
@@ -146,7 +185,7 @@ async function run() {
           currentEmployees: 0,
           subscription: 'basic'
         }
-      } 
+      }
       if (userData.role === 'employee') {
         //Employee Registration   
         newUser = {
