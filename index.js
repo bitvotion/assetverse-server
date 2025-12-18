@@ -2,6 +2,9 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config()
 const { MongoClient, ServerApiVersion } = require('mongodb');
+const jwt = require('jsonwebtoken');
+// const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+
 const app = express()
 const port = process.env.PORT || 3000
 
@@ -27,14 +30,30 @@ app.get('/', (req, res) => {
 
 async function run() {
   try {
-    // Connect the client to the server	(optional starting in v4.7)
+    // Connect to MongoDB but have to comment for vercel deploy
     await client.connect();
+
+    // ---Collections---
     const db = client.db("AssetVerse_DB")
     const usersCollection = db.collection('users')
+    const assetsCollection = db.collection('assets')
+    const requestCollection = db.collection('requests')
+    const affiliationCollection = db.collection('employeeAffiliations')
+    const paymentCollection = db.collection('payments')
 
 
-    app.get('/assets', (req, res) => {
-      res.send("Inside Mongo DB")
+    app.get('/users', async (req,res)=>{
+      let query = {}
+      const cursor = usersCollection.find(query)
+      const result = await cursor.toArray() 
+      res.send(result)
+    })
+
+    app.get('/users/:email', async (req, res) => {
+      const email = req.params.email
+      const query = {email: email}
+      const result = await usersCollection.findOne(query)
+      res.send(result)
     })
 
     app.post('/users', async (req, res) => {
