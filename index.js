@@ -41,6 +41,32 @@ async function run() {
     const affiliationCollection = db.collection('employeeAffiliations')
     const paymentCollection = db.collection('payments')
 
+    // -----Middlewares-----
+    
+    // VerifyToken 
+    const verifyToken = (req, res, next) => {
+      if(!req.headers.authorization) {
+        return res.status(401).send({message: 'unauthorized access'})
+      }
+      const token = req.headers.authorization.split(' ')[1]
+      jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded)=>{
+        if(err){
+          return res.status(401).send({message: 'unauthorized access'})
+        }
+        req.decoded = decoded
+        next()
+      })
+    }
+
+
+    // ----Authentication through JWT
+
+    // Generate Token
+    app.post('/jwt', async (req, res) => {
+      const user = req.body;
+      const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' });
+      res.send({ token });
+    });
 
     app.get('/users', async (req,res)=>{
       let query = {}
