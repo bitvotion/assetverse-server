@@ -94,19 +94,28 @@ async function run() {
       res.send({role: user?.role})
     })
 
-    app.get('/users', async (req,res)=>{
-      let query = {}
-      const cursor = usersCollection.find(query)
-      const result = await cursor.toArray() 
-      res.send(result)
-    })
-
+    // Get users profile
     app.get('/users/:email', async (req, res) => {
       const email = req.params.email
       const query = {email: email}
       const result = await usersCollection.findOne(query)
       res.send(result)
     })
+
+    // Update user profile
+    app.patch('/users/:email', async(req,res)=>{
+      const email = req.params.email
+      const updates = req.body
+      const query = {email: email}
+      const updatedDoc = {
+        $set: {...updates}
+      }
+      const result = await usersCollection.updateOne(query, updatedDoc)
+      res.send(result)
+    })
+
+
+
 
     app.post('/users', async (req, res) => {
       const userData = req.body
