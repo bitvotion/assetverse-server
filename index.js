@@ -58,6 +58,17 @@ async function run() {
       })
     }
 
+    // Verify HR 
+    const verifyHR = async(req, res, next)=>{
+      const email = req.decoded.email
+      const query = {email: email}
+      const user = await usersCollection.findOne(query)
+      const isHR = user?.role === 'hr'
+      if(!isHR) {
+        return res.status(403).send({ message: 'forbidden access' })
+      }
+      next()
+    }
 
     // ----Authentication through JWT
 
@@ -67,6 +78,21 @@ async function run() {
       const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' });
       res.send({ token });
     });
+
+    // Role checking ----VERIFYTOKEN Add korte hobe
+    app.get('/users/role/:email', async(req, res)=> {
+      const email = req.params.email
+
+      // if(email !== req.decoded.email){
+      //   return res.status(401).send({message: 'unauthorized access'}
+      //   )
+      // }
+
+      const query = {email: email}
+      const user = await usersCollection.findOne(query, {projection: {role: 1, _id: 0}})
+
+      res.send({role: user?.role})
+    })
 
     app.get('/users', async (req,res)=>{
       let query = {}
