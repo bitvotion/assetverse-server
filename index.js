@@ -227,6 +227,7 @@ async function run() {
         }
       }
       const result = await assetsCollection.updateOne(query, updatedDoc)
+      res.send(result)
     })
 
     // Request API
@@ -241,22 +242,102 @@ async function run() {
     })
 
     // Get requests 
-    app.get('/request', async (req, res) => {
+    app.get('/requests', async (req, res) => {
       const { email, hrEmail, search } = req.query
       let(email) = {}
       // Employee : My requests
       query.requesterEmail = email
       if (search) query.assetName = { $regex: search, $options: 'i' }
       else if (hrEmail) {
+        // All request
         query.hrEmail = hrEmail
-        if(search) query.requesterEmail = { $regex : search, $options: 'i'}
+        if (search) query.requesterEmail = { $regex: search, $options: 'i' }
       }
       const result = await requestsCollection.find(query).toArray()
       res.send(result)
     })
 
     // Asset request Accept or Reject (HR Only)
-    
+    app.patch('/requests/:id', async (req, res) => {
+      const id = req.params.id
+      const { status } = req.body
+      const query = { _id: new ObjectId(id) }
+      const request = await requestsCollection.findOne(query)
+
+      if (!request) return res.status(404).send({ message: "Request not found" })
+
+      // Reject
+      if (status === 'rejected') {
+        const updateStatus = {
+          $set: {
+            requestStatus: 'rejected',
+            rejectedDate: new Date()
+          }
+        }
+        const result = await requestsCollection.updateOne(query, updateStatus)
+        return res.send(result)
+      }
+
+      // Approve
+      if (status === 'approved') {
+        const { requesterEmail, hrEmail, assetId } = request
+
+        // Affiliation check 
+        const existingAffiliation = await affiliationCollection.findOne({
+          employeeEmail: requesterEmail,
+          hrEmail: hrEmail
+        })
+
+        if (!existingAffiliation) {
+          // New Employee ---> Check Package limit
+          const hrUser = await usersCollection.findOne({email: hrEmail})
+          const currentEmployees = hrUser.currentEmployees || 0
+          const packageLimit = hrUser.packageLimit || 0
+
+          if(currentEmployees >= packageLimit) {
+            // HR needs to upgrade package
+            return res.send({message: "Limit Reached", error: true})
+          }
+
+          // If Limit is ok : Create affiliation
+          await affiliationCollection.insertOne({
+            employeeEmail: requesterEmail,
+            hrEmail: hrEmail,
+            companyName: hrUser.companyName,
+            companyLogo: hrUser.companyLogo,
+            role: 'employee',
+            joinDate: new Date()
+          })
+
+          // Update HR's employee count
+          await usersCollection.updateOne(
+            {email: hrEmail},
+            {$inc: {currentEmployees: 1}}
+          )
+
+          // Update request status approved
+          const updateStatus = {
+            $set: {
+              requestStatus: 'approved',
+              approvedDate: new Date()
+            }
+          }
+          const requestResult = await requestsCollection.updateOne(query, updateStatus)
+
+          // Reduce asset quantity 
+          if(assetId){
+            const assetQuery = {_id: new ObjectId(assetId)}
+            const updateAsset = {
+              $inc: {productQuantity: -1}
+            }
+            await assetsCollection.updateOne(assetQuery, updateAsset)
+          }
+
+          return res.send(requestResult)
+        }
+      }
+    })
+
 
 
     // Send a ping to confirm a successful connection
