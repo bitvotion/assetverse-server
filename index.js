@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config()
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const jwt = require('jsonwebtoken');
 // const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
@@ -37,7 +37,7 @@ async function run() {
     const db = client.db("AssetVerse_DB")
     const usersCollection = db.collection('users')
     const assetsCollection = db.collection('assets')
-    const requestCollection = db.collection('requests')
+    const requestsCollection = db.collection('requests')
     const affiliationCollection = db.collection('employeeAffiliations')
     const paymentCollection = db.collection('payments')
 
@@ -79,6 +79,8 @@ async function run() {
       res.send({ token });
     });
 
+    // User Related API
+
     // Role checking ----VERIFYTOKEN Add korte hobe
     app.get('/users/role/:email', async (req, res) => {
       const email = req.params.email
@@ -92,6 +94,56 @@ async function run() {
       const user = await usersCollection.findOne(query, { projection: { role: 1, _id: 0 } })
 
       res.send({ role: user?.role })
+    })
+
+    // Create user
+    app.post('/users', async (req, res) => {
+      const userData = req.body
+
+      // Social Login Protection
+      const query = { email: userData.email }
+      const existingUser = await usersCollection.findOne(query)
+      if (existingUser) {
+        return res.send({ message: 'User already exists', insertedId: null })
+      }
+
+      // Based on Role
+
+      let newUser = {}
+
+      if (userData.role === 'hr') {
+        // HR Registration
+        newUser = {
+          name: userData.name,
+          email: userData.email,
+          companyName: userData.companyName,
+          companyLogo: userData.companyLogo,
+          dateOfBirth: userData.dateOfBirth,
+          userPhoto: userData.userPhoto,
+          // Auto-assigned Fields
+          role: 'hr',
+          packageLimit: 5,
+          currentEmployees: 0,
+          subscription: 'basic'
+        }
+      }
+      if (userData.role === 'employee') {
+        //Employee Registration   
+        newUser = {
+          name: userData.name,
+          email: userData.email,
+          dateOfBirth: userData.dateOfBirth,
+          userPhoto: userData.userPhoto,
+          // Auto-assigned
+          role: 'employee'
+        }
+      }
+
+      // Save to MongoDB
+      const result = await usersCollection.insertOne(newUser)
+      res.send(result)
+      console.log(userData);
+
     })
 
     // Get users profile
@@ -154,56 +206,58 @@ async function run() {
       res.send(result);
     })
 
-
-
-    app.post('/users', async (req, res) => {
-      const userData = req.body
-
-      // Social Login Protection
-      const query = { email: userData.email }
-      const existingUser = await usersCollection.findOne(query)
-      if (existingUser) {
-        return res.send({ message: 'User already exists', insertedId: null })
-      }
-
-      // Based on Role
-
-      let newUser = {}
-
-      if (userData.role === 'hr') {
-        // HR Registration
-        newUser = {
-          name: userData.name,
-          email: userData.email,
-          companyName: userData.companyName,
-          companyLogo: userData.companyLogo,
-          dateOfBirth: userData.dateOfBirth,
-          userPhoto: userData.userPhoto,
-          // Auto-assigned Fields
-          role: 'hr',
-          packageLimit: 5,
-          currentEmployees: 0,
-          subscription: 'basic'
-        }
-      }
-      if (userData.role === 'employee') {
-        //Employee Registration   
-        newUser = {
-          name: userData.name,
-          email: userData.email,
-          dateOfBirth: userData.dateOfBirth,
-          userPhoto: userData.userPhoto,
-          // Auto-assigned
-          role: 'employee'
-        }
-      }
-
-      // Save to MongoDB
-      const result = await usersCollection.insertOne(newUser)
-      res.send(result)
-      console.log(userData);
-
+    // Delete Asset
+    app.delete('/assets/:id', async (req, res) => {
+      const id = req.params.id
+      const query = { _id: new ObjectId(id) }
+      const result = await assetsCollection.deleteOne(query)
+      req.send(result)
     })
+
+    // Update Asset
+    app.patch('/assets/:id', async (req, res) => {
+      const id = req.params.id
+      const data = req.body
+      const query = { _id: new ObjectId(id) }
+      const updatedDoc = {
+        $set: {
+          productName: data.productName,
+          productType: data.productType,
+          productQuantity: parseInt(data.productQuantity),
+        }
+      }
+      const result = await assetsCollection.updateOne(query, updatedDoc)
+    })
+
+    // Request API
+
+    // Employee requests Assets
+    app.post('/requests', async (req, res) => {
+      const request = req.body
+      request.requestDate = new Date()
+      request.requestStatus = 'pending'
+      const result = await requestsCollection.insertOne(request)
+      res.send(result)
+    })
+
+    // Get requests 
+    app.get('/request', async (req, res) => {
+      const { email, hrEmail, search } = req.query
+      let(email) = {}
+      // Employee : My requests
+      query.requesterEmail = email
+      if (search) query.assetName = { $regex: search, $options: 'i' }
+      else if (hrEmail) {
+        query.hrEmail = hrEmail
+        if(search) query.requesterEmail = { $regex : search, $options: 'i'}
+      }
+      const result = await requestsCollection.find(query).toArray()
+      res.send(result)
+    })
+
+    // Asset request Accept or Reject (HR Only)
+    
+
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
