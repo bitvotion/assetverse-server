@@ -170,10 +170,13 @@ async function run() {
 
     // Add asset hr only
     app.post('/assets', async (req, res) => {
-      const asset = req.body
-      asset.dateAdded = new Date()
-      asset.productQuantity = parseInt(asset.productQuantity)
-      const result = await assetsCollection.insertOne(asset)
+      const assetData = req.body
+      assetData.dateAdded = new Date()
+      assetData.productQuantity = parseInt(assetData.productQuantity)
+      assetData.availableQuantity = parseInt(assetData.availableQuantity)
+      console.log(assetData);
+      const result = await assetsCollection.insertOne(assetData)
+      res.send(result)
     })
 
     // Get Assets with filtered, search, pagination
@@ -183,25 +186,33 @@ async function run() {
       const filterType = req.query.filter || ""
       const sortOrder = req.query.sort || ""
 
+      // Base query
       let query = {
         hrEmail: email,
         productName: { $regex: search, $options: 'i' }
       }
 
+      // Filter
       if (filterType) {
         query.productType = filterType
       }
 
       // Pagination
       const page = parseInt(req.query.page) || 0
-      const limit = parseInt(req.query.limit) || 0
+      const limit = parseInt(req.query.limit) || 10
       const skip = page * limit
 
+      // Sort options
       let options = {}
       if (sortOrder === 'asc') options.sort = { productQuantity: 1 }
       if (sortOrder === 'desc') options.sort = { productQuantity: -1 }
 
       const cursor = assetsCollection.find(query, options).skip(skip).limit(limit)
+
+      if (limit > 0) {
+        cursor.skip(skip).limit(limit)
+      }
+
       const result = await cursor.toArray()
       res.send(result);
     })
@@ -211,7 +222,7 @@ async function run() {
       const id = req.params.id
       const query = { _id: new ObjectId(id) }
       const result = await assetsCollection.deleteOne(query)
-      req.send(result)
+      res.send(result)
     })
 
     // Update Asset
@@ -219,11 +230,33 @@ async function run() {
       const id = req.params.id
       const data = req.body
       const query = { _id: new ObjectId(id) }
+
+      const existingAsset = await assetsCollection.findOne(query)
+
+      if (!existingAsset) {
+        return res.status(404).send({ message: "Asset not found" })
+      }
+
+      const newQuantity = parseInt(data.productQuantity)
+      const oldQuantity = parseInt(existingAsset.productQuantity)
+      const difference = newQuantity - oldQuantity
+
+      const currentAssigned = oldQuantity - existingAsset.availableQuantity;
+      
+      if (newQuantity < currentAssigned) {
+          return res.status(400).send({ message: "Cannot reduce quantity. Items are currently assigned to employees." });
+      }
+
       const updatedDoc = {
         $set: {
           productName: data.productName,
           productType: data.productType,
-          productQuantity: parseInt(data.productQuantity),
+          productImage: data.productImage,
+          productQuantity: newQuantity,
+          lastUpdate: new Date(),
+        },
+        $inc: {
+          availableQuantity: difference
         }
       }
       const result = await assetsCollection.updateOne(query, updatedDoc)
@@ -290,13 +323,13 @@ async function run() {
 
         if (!existingAffiliation) {
           // New Employee ---> Check Package limit
-          const hrUser = await usersCollection.findOne({email: hrEmail})
+          const hrUser = await usersCollection.findOne({ email: hrEmail })
           const currentEmployees = hrUser.currentEmployees || 0
           const packageLimit = hrUser.packageLimit || 0
 
-          if(currentEmployees >= packageLimit) {
+          if (currentEmployees >= packageLimit) {
             // HR needs to upgrade package
-            return res.send({message: "Limit Reached", error: true})
+            return res.send({ message: "Limit Reached", error: true })
           }
 
           // If Limit is ok : Create affiliation
@@ -311,8 +344,8 @@ async function run() {
 
           // Update HR's employee count
           await usersCollection.updateOne(
-            {email: hrEmail},
-            {$inc: {currentEmployees: 1}}
+            { email: hrEmail },
+            { $inc: { currentEmployees: 1 } }
           )
 
           // Update request status approved
@@ -325,10 +358,10 @@ async function run() {
           const requestResult = await requestsCollection.updateOne(query, updateStatus)
 
           // Reduce asset quantity 
-          if(assetId){
-            const assetQuery = {_id: new ObjectId(assetId)}
+          if (assetId) {
+            const assetQuery = { _id: new ObjectId(assetId) }
             const updateAsset = {
-              $inc: {productQuantity: -1}
+              $inc: { productQuantity: -1 }
             }
             await assetsCollection.updateOne(assetQuery, updateAsset)
           }
