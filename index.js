@@ -224,7 +224,7 @@ async function run() {
       }
 
       const result = await cursor.toArray()
-      res.send({result, count: totalCount});
+      res.send({ result, count: totalCount });
     })
 
     // Delete Asset
@@ -301,18 +301,40 @@ async function run() {
 
     // Get requests 
     app.get('/requests', async (req, res) => {
-      const { email, hrEmail, search } = req.query
-      let(email) = {}
-      // Employee : My requests
-      query.requesterEmail = email
-      if (search) query.assetName = { $regex: search, $options: 'i' }
-      else if (hrEmail) {
-        // All request
+      const { email, hrEmail, search, page, limit } = req.query
+
+      let query = {}
+
+      if (email) {
+        query.requesterEmail = email
+
+        if (search) {
+          query.assetName = { $regex: search, $options: 'i' }
+        }
+      } else if (hrEmail) {
         query.hrEmail = hrEmail
-        if (search) query.requesterEmail = { $regex: search, $options: 'i' }
+
+        if (search) {
+          query.$or = [
+            { requesterName: { $regex: search, $options: 'i' } },
+            { requesterEmail: { $regex: search, $options: 'i' } }
+          ]
+        }
       }
-      const result = await requestsCollection.find(query).toArray()
-      res.send(result)
+
+      const pageNumber = parseInt(page) || 0;
+      const limitNumber = parseInt(limit) || 10;
+      const skip = pageNumber * limitNumber;
+
+      const result = await requestsCollection
+        .find(query)
+        .skip(skip)
+        .limit(limit)
+        .toArray()
+
+      const count = await requestsCollection.countDocuments(query)
+
+      res.send({result, count})
     })
 
     // Asset request Accept or Reject (HR Only)
