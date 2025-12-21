@@ -301,7 +301,13 @@ async function run() {
 
     // Get requests 
     app.get('/requests', async (req, res) => {
-      const { email, hrEmail, search, page, limit } = req.query
+      const { email, hrEmail, search } = req.query
+
+
+      // --- DEBUGGING LOGS ---
+      console.log("---------------- REQUEST DEBUG ----------------");
+      console.log("Logged In User trying to view:", email || hrEmail);
+      console.log("Search Term:", search);
 
       let query = {}
 
@@ -317,14 +323,15 @@ async function run() {
         if (search) {
           query.$or = [
             { requesterName: { $regex: search, $options: 'i' } },
-            { requesterEmail: { $regex: search, $options: 'i' } }
+            { requesterEmail: { $regex: search, $options: 'i' } },
+            { assetName: { $regex: search, $options: 'i' } },
           ]
         }
       }
 
-      const pageNumber = parseInt(page) || 0;
-      const limitNumber = parseInt(limit) || 10;
-      const skip = pageNumber * limitNumber;
+      const page = parseInt(req.query.page) || 0;
+      const limit = parseInt(req.query.limit) || 10;
+      const skip = page * limit;
 
       const result = await requestsCollection
         .find(query)
@@ -334,7 +341,7 @@ async function run() {
 
       const count = await requestsCollection.countDocuments(query)
 
-      res.send({result, count})
+      res.send({ result, count })
     })
 
     // Asset request Accept or Reject (HR Only)
@@ -414,8 +421,29 @@ async function run() {
           }
 
           return res.send(requestResult)
+        } else {
+          // 1. Just update the request status
+          const updateStatus = {
+            $set: {
+              requestStatus: 'approved',
+              approvedDate: new Date()
+            }
+          }
+          const requestResult = await requestsCollection.updateOne(query, updateStatus)
+
+          // 2. Reduce asset quantity
+          if (assetId) {
+            const assetQuery = { _id: new ObjectId(assetId) }
+            const updateAsset = {
+              $inc: { productQuantity: -1 } // Or availableQuantity depending on your schema
+            }
+            await assetsCollection.updateOne(assetQuery, updateAsset)
+          }
+
+          return res.send(requestResult)
         }
       }
+
     })
 
 
