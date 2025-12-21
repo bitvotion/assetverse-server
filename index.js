@@ -174,7 +174,7 @@ async function run() {
       assetData.dateAdded = new Date()
       assetData.productQuantity = parseInt(assetData.productQuantity)
       assetData.availableQuantity = parseInt(assetData.availableQuantity)
-      console.log(assetData);
+
       const result = await assetsCollection.insertOne(assetData)
       res.send(result)
     })
@@ -182,14 +182,22 @@ async function run() {
     // Get Assets with filtered, search, pagination
     app.get('/assets', async (req, res) => {
       const email = req.query.email
+      const company = req.query.company;
       const search = req.query.search || ""
       const filterType = req.query.filter || ""
       const sortOrder = req.query.sort || ""
 
+
       // Base query
       let query = {
-        hrEmail: email,
         productName: { $regex: search, $options: 'i' }
+      }
+
+      if (email) {
+        query.hrEmail = email;
+      } else if (company) {
+        // EMPLOYEE VIEW: Show assets belonging to this Company
+        query.companyName = company;
       }
 
       // Filter
@@ -209,12 +217,14 @@ async function run() {
 
       const cursor = assetsCollection.find(query, options).skip(skip).limit(limit)
 
+      const totalCount = await assetsCollection.countDocuments(query)
+
       if (limit > 0) {
         cursor.skip(skip).limit(limit)
       }
 
       const result = await cursor.toArray()
-      res.send(result);
+      res.send({result, count: totalCount});
     })
 
     // Delete Asset
@@ -242,9 +252,9 @@ async function run() {
       const difference = newQuantity - oldQuantity
 
       const currentAssigned = oldQuantity - existingAsset.availableQuantity;
-      
+
       if (newQuantity < currentAssigned) {
-          return res.status(400).send({ message: "Cannot reduce quantity. Items are currently assigned to employees." });
+        return res.status(400).send({ message: "Cannot reduce quantity. Items are currently assigned to employees." });
       }
 
       const updatedDoc = {
@@ -268,9 +278,24 @@ async function run() {
     // Employee requests Assets
     app.post('/requests', async (req, res) => {
       const request = req.body
-      request.requestDate = new Date()
-      request.requestStatus = 'pending'
-      const result = await requestsCollection.insertOne(request)
+
+      const asset = await assetsCollection.findOne({ _id: new ObjectId(request.assetId) })
+
+      if (!asset) {
+        return res.status(404).send({ message: "Asset not found" })
+      }
+      if (asset.availableQuantity <= 0) {
+        return res.status(404).send({ message: "Asset is out of stock" })
+      }
+
+      const newRequest = {
+        ...request,
+        requestDate: new Date(),
+        requestStatus: 'pending',
+        approvalDate: null,
+      }
+
+      const result = await requestsCollection.insertOne(newRequest)
       res.send(result)
     })
 
