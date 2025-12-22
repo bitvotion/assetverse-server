@@ -39,7 +39,9 @@ async function run() {
     const assetsCollection = db.collection('assets')
     const requestsCollection = db.collection('requests')
     const affiliationCollection = db.collection('employeeAffiliations')
+    const assignedAssetsCollection = db.collection('assignedAssets')
     const paymentCollection = db.collection('payments')
+    const packageCollection = db.collection('packages')
 
     // -----Middlewares-----
 
@@ -122,11 +124,14 @@ async function run() {
           userPhoto: userData.userPhoto,
           // Auto-assigned Fields
           role: 'hr',
-          packageLimit: 5,
+          packageLimit: userData.packageLimit,
           currentEmployees: 0,
-          subscription: 'basic'
+          subscription: userData.subscription
         }
       }
+      console.log('-----Show hr reg data line 132-----');
+      console.log(newUser);
+
       if (userData.role === 'employee') {
         //Employee Registration   
         newUser = {
@@ -303,12 +308,6 @@ async function run() {
     app.get('/requests', async (req, res) => {
       const { email, hrEmail, search } = req.query
 
-
-      // --- DEBUGGING LOGS ---
-      console.log("---------------- REQUEST DEBUG ----------------");
-      console.log("Logged In User trying to view:", email || hrEmail);
-      console.log("Search Term:", search);
-
       let query = {}
 
       if (email) {
@@ -337,6 +336,7 @@ async function run() {
         .find(query)
         .skip(skip)
         .limit(limit)
+        .sort({ requestDate: -1 })
         .toArray()
 
       const count = await requestsCollection.countDocuments(query)
@@ -367,7 +367,7 @@ async function run() {
 
       // Approve
       if (status === 'approved') {
-        const { requesterEmail, hrEmail, assetId } = request
+        const { requesterEmail, hrEmail, assetId, requesterName } = request
 
         // Affiliation check 
         const existingAffiliation = await affiliationCollection.findOne({
@@ -381,6 +381,7 @@ async function run() {
           const currentEmployees = hrUser.currentEmployees || 0
           const packageLimit = hrUser.packageLimit || 0
 
+          // Check Package limit
           if (currentEmployees >= packageLimit) {
             // HR needs to upgrade package
             return res.send({ message: "Limit Reached", error: true })
@@ -389,11 +390,13 @@ async function run() {
           // If Limit is ok : Create affiliation
           await affiliationCollection.insertOne({
             employeeEmail: requesterEmail,
+            employeeName: requesterName,
             hrEmail: hrEmail,
             companyName: hrUser.companyName,
             companyLogo: hrUser.companyLogo,
             role: 'employee',
-            joinDate: new Date()
+            affiliationDate: new Date(),
+            status: "active"
           })
 
           // Update HR's employee count
@@ -411,18 +414,36 @@ async function run() {
           }
           const requestResult = await requestsCollection.updateOne(query, updateStatus)
 
+          // INSERT INTO assignedAssets COLLECTION
+          const assignedAssetDoc = {
+            requestId: new ObjectId(id), // Link to original request
+            assetId: new ObjectId(assetId),
+            assetName: request.assetName,
+            assetImage: request.assetImage,
+            assetType: request.assetType,
+            employeeEmail: requesterEmail,
+            employeeName: request.requesterName,
+            hrEmail: hrEmail,
+            companyName: request.companyName,
+            assignmentDate: new Date(),
+            returnDate: null, // null if not returned
+            status: "assigned"
+          }
+
+          await assignedAssetsCollection.insertOne(assignedAssetDoc)
+
           // Reduce asset quantity 
           if (assetId) {
             const assetQuery = { _id: new ObjectId(assetId) }
             const updateAsset = {
-              $inc: { productQuantity: -1 }
+              $inc: { availableQuantity: -1 }
             }
             await assetsCollection.updateOne(assetQuery, updateAsset)
           }
 
           return res.send(requestResult)
         } else {
-          // 1. Just update the request status
+          // update the request status
           const updateStatus = {
             $set: {
               requestStatus: 'approved',
@@ -431,11 +452,28 @@ async function run() {
           }
           const requestResult = await requestsCollection.updateOne(query, updateStatus)
 
-          // 2. Reduce asset quantity
+          // INSERT INTO assignedAssets COLLECTION
+          const assignedAssetDoc = {
+            requestId: new ObjectId(id),
+            assetId: new ObjectId(assetId),
+            assetName: request.assetName,
+            assetImage: request.assetImage,
+            assetType: request.assetType,
+            employeeEmail: requesterEmail,
+            employeeName: request.requesterName,
+            hrEmail: hrEmail,
+            companyName: request.companyName,
+            assignmentDate: new Date(),
+            returnDate: null,
+            status: "assigned"
+          }
+          await assignedAssetsCollection.insertOne(assignedAssetDoc)
+
+          // Reduce asset quantity
           if (assetId) {
             const assetQuery = { _id: new ObjectId(assetId) }
             const updateAsset = {
-              $inc: { productQuantity: -1 } // Or availableQuantity depending on your schema
+              $inc: { availableQuantity: -1 } // Or availableQuantity depending on your schema
             }
             await assetsCollection.updateOne(assetQuery, updateAsset)
           }
@@ -446,6 +484,217 @@ async function run() {
 
     })
 
+    // My Employees
+    app.get('/my-employees', async (req, res) => {
+      const { email, search } = req.query
+
+      const page = parseInt(req.query.page) || 0;
+      const limit = parseInt(req.query.limit) || 10;
+      const skip = page * limit;
+
+      try {
+
+        const hrUser = await usersCollection.findOne(
+          { email: email },
+          { projection: { packageLimit: 1 } }
+        );
+        const packageLimit = hrUser?.packageLimit || 0;
+
+        const pipeline = [
+          {
+            $match: { hrEmail: email }
+          },
+          {
+            $lookup: {
+              from: 'users',
+              localField: 'employeeEmail',
+              foreignField: 'email',
+              as: 'user'
+            }
+          },
+          {
+            $unwind: '$user'
+          },
+          {
+            $lookup: {
+              from: 'assignedAssets',
+              let: { eEmail: '$employeeEmail' },
+              pipeline: [
+                {
+                  $match: {
+                    $and: [
+                      { $expr: { $eq: ['$employeeEmail', '$$eEmail'] } },
+                      { status: "assigned" }
+                    ]
+                  }
+                }
+              ],
+              as: 'assets'
+            }
+          },
+          {
+            $project: {
+              _id: 1,
+              name: '$user.name',
+              email: '$user.email',
+              image: '$user.userPhoto',
+              role: '$user.role',
+              dateOfBirth: '$user.dateOfBirth',
+              joinDate: '$joinDate',
+              assetsCount: { $size: '$assets' },
+            }
+          }
+        ]
+        if (search) {
+          pipeline.push({
+            $match: {
+              $or: [
+                { name: { $regex: search, $options: 'i' } },
+                { email: { $regex: search, $options: 'i' } }
+              ]
+            }
+          });
+        }
+
+        pipeline.push({
+          $facet: {
+            metadata: [{ $count: "totalCount" }],
+            data: [{ $skip: skip }, { $limit: limit }]
+          }
+        })
+
+        const result = await affiliationCollection.aggregate(pipeline).toArray();
+
+        const totalCount = result[0].metadata[0]?.totalCount || 0;
+        const employees = result[0].data;
+
+        res.send({ result: employees, count: totalCount, packageLimit: packageLimit });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Server Error" });
+      }
+    })
+
+    // My Team
+    app.get('/team-members', async (req, res) => {
+      const { email, hrEmail } = req.query
+
+      try {
+        const isAffiliated = await affiliationCollection.findOne({
+          employeeEmail: email,
+          hrEmail: hrEmail,
+        })
+console.log(isAffiliated);
+        if (!isAffiliated) {
+          return res.status(403).send({ message: "Access Forbidden" })
+        }
+        const result = await affiliationCollection.aggregate([
+          {
+            $match: { hrEmail: hrEmail }
+          },
+          {
+            $lookup: {
+              from: 'users',
+              localField: 'employeeEmail',
+              foreignField: 'email',
+              as: 'user'
+            }
+          },
+          { $unwind: '$user' },
+          {
+            $project: {
+              name: '$user.name',
+              email: '$user.email',
+              image: '$user.userPhoto',
+              role: '$role',
+              dateOfBirth: '$user.dateOfBirth'
+            }
+          }
+        ]).toArray();
+
+        //  Fetch the HR (Admin) Profile
+        const hrUser = await usersCollection.findOne({ email: hrEmail });
+        const hrAsMember = {
+          name: hrUser?.name || "Admin",
+          email: hrUser?.email,
+          image: hrUser?.profileImage,
+          role: 'admin',
+          dateOfBirth: hrUser?.dateOfBirth
+        };
+
+        res.send([hrAsMember, ...result])
+
+      } catch (err) {
+        console.error(err);
+      }
+    })
+
+    // Helper: Get My Affiliated Companies (To populate the Tabs/Dropdown)
+    app.get('/my-affiliations', async (req, res) => {
+      const { email } = req.query;
+      const affiliations = await affiliationCollection.find({ employeeEmail: email }).toArray();
+
+      // Return only the company info needed for tabs
+      const companies = affiliations.map(aff => ({
+        companyName: aff.companyName,
+        companyLogo: aff.companyLogo,
+        hrEmail: aff.hrEmail,
+        _id: aff._id
+      }));
+
+      res.send(companies);
+    });
+
+    // Get Packages
+    app.get('/packages', async(req,res)=>{
+
+      const result = await packageCollection.find().toArray()
+      res.send(result)
+    })
+
+    // Get My Assets
+    app.get('/my-assets', async (req, res) => {
+      const { email, search, type } = req.query;
+
+      // 1. Pagination Logic
+      const page = parseInt(req.query.page) || 0;
+      const limit = parseInt(req.query.limit) || 10;
+      const skip = page * limit;
+
+      // 2. Build Query
+      // Strict Filter: Only show assets belonging to the logged-in employee
+      let query = { employeeEmail: email };
+
+      // Search by Asset Name
+      if (search) {
+        query.assetName = { $regex: search, $options: 'i' };
+      }
+
+      // Filter by Type (Returnable / Non-returnable)
+      if (type) {
+        query.assetType = type;
+      }
+
+      // Optional: Filter out returned items if you only want to show current assets
+      // query.status = "assigned"; 
+
+      try {
+        // 3. Fetch Data from 'assignedAssets' collection
+        const result = await assignedAssetsCollection
+          .find(query)
+          .skip(skip)
+          .limit(limit)
+          .toArray();
+
+        // 4. Get Total Count (for Pagination)
+        const count = await assignedAssetsCollection.countDocuments(query);
+
+        res.send({ result, count });
+      } catch (error) {
+        console.error("Error fetching my assets:", error);
+        res.status(500).send({ message: "Error fetching assets" });
+      }
+    });
 
 
     // Send a ping to confirm a successful connection
