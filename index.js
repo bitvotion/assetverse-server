@@ -3,7 +3,7 @@ const cors = require('cors');
 require('dotenv').config()
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const jwt = require('jsonwebtoken');
-// const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+const stripe = require('stripe')(process.env.STRIPE_SECRET)
 
 const app = express()
 const port = process.env.PORT || 3000
@@ -84,7 +84,8 @@ async function run() {
     // User Related API
 
     // Role checking ----VERIFYTOKEN Add korte hobe
-    app.get('/users/role/:email', async (req, res) => {
+    
+    app.get('/users/role/:email', verifyToken, async (req, res) => {
       const email = req.params.email
 
       // if(email !== req.decoded.email){
@@ -129,8 +130,6 @@ async function run() {
           subscription: userData.subscription
         }
       }
-      console.log('-----Show hr reg data line 132-----');
-      console.log(newUser);
 
       if (userData.role === 'employee') {
         //Employee Registration   
@@ -152,7 +151,7 @@ async function run() {
     })
 
     // Get users profile
-    app.get('/users/:email', async (req, res) => {
+    app.get('/users/:email', verifyToken, async (req, res) => {
       const email = req.params.email
       const query = { email: email }
       const result = await usersCollection.findOne(query)
@@ -160,7 +159,7 @@ async function run() {
     })
 
     // Update user profile
-    app.patch('/users/:email', async (req, res) => {
+    app.patch('/users/:email', verifyToken, async (req, res) => {
       const email = req.params.email
       const updates = req.body
       const query = { email: email }
@@ -174,7 +173,7 @@ async function run() {
     // ASSETS API 
 
     // Add asset hr only
-    app.post('/assets', async (req, res) => {
+    app.post('/assets', verifyToken, async (req, res) => {
       const assetData = req.body
       assetData.dateAdded = new Date()
       assetData.productQuantity = parseInt(assetData.productQuantity)
@@ -185,7 +184,7 @@ async function run() {
     })
 
     // Get Assets with filtered, search, pagination
-    app.get('/assets', async (req, res) => {
+    app.get('/assets', verifyToken, async (req, res) => {
       const email = req.query.email
       const company = req.query.company;
       const search = req.query.search || ""
@@ -233,7 +232,7 @@ async function run() {
     })
 
     // Delete Asset
-    app.delete('/assets/:id', async (req, res) => {
+    app.delete('/assets/:id', verifyToken, async (req, res) => {
       const id = req.params.id
       const query = { _id: new ObjectId(id) }
       const result = await assetsCollection.deleteOne(query)
@@ -241,7 +240,7 @@ async function run() {
     })
 
     // Update Asset
-    app.patch('/assets/:id', async (req, res) => {
+    app.patch('/assets/:id', verifyToken, async (req, res) => {
       const id = req.params.id
       const data = req.body
       const query = { _id: new ObjectId(id) }
@@ -281,7 +280,7 @@ async function run() {
     // Request API
 
     // Employee requests Assets
-    app.post('/requests', async (req, res) => {
+    app.post('/requests', verifyToken, async (req, res) => {
       const request = req.body
 
       const asset = await assetsCollection.findOne({ _id: new ObjectId(request.assetId) })
@@ -305,7 +304,7 @@ async function run() {
     })
 
     // Get requests 
-    app.get('/requests', async (req, res) => {
+    app.get('/requests', verifyToken, async (req, res) => {
       const { email, hrEmail, search } = req.query
 
       let query = {}
@@ -345,7 +344,7 @@ async function run() {
     })
 
     // Asset request Accept or Reject (HR Only)
-    app.patch('/requests/:id', async (req, res) => {
+    app.patch('/requests/:id', verifyToken, async (req, res) => {
       const id = req.params.id
       const { status } = req.body
       const query = { _id: new ObjectId(id) }
@@ -485,7 +484,7 @@ async function run() {
     })
 
     // My Employees
-    app.get('/my-employees', async (req, res) => {
+    app.get('/my-employees', verifyToken, async (req, res) => {
       const { email, search } = req.query
 
       const page = parseInt(req.query.page) || 0;
@@ -576,7 +575,7 @@ async function run() {
     })
 
     // My Team
-    app.get('/team-members', async (req, res) => {
+    app.get('/team-members', verifyToken, async (req, res) => {
       const { email, hrEmail } = req.query
 
       try {
@@ -584,7 +583,7 @@ async function run() {
           employeeEmail: email,
           hrEmail: hrEmail,
         })
-console.log(isAffiliated);
+        console.log(isAffiliated);
         if (!isAffiliated) {
           return res.status(403).send({ message: "Access Forbidden" })
         }
@@ -630,7 +629,7 @@ console.log(isAffiliated);
     })
 
     // Helper: Get My Affiliated Companies (To populate the Tabs/Dropdown)
-    app.get('/my-affiliations', async (req, res) => {
+    app.get('/my-affiliations', verifyToken, async (req, res) => {
       const { email } = req.query;
       const affiliations = await affiliationCollection.find({ employeeEmail: email }).toArray();
 
@@ -645,15 +644,133 @@ console.log(isAffiliated);
       res.send(companies);
     });
 
+    // Return an Asset (PATCH Method)
+    app.patch('/assets/return/:id', verifyToken, async (req, res) => {
+      const { id } = req.params; // The ID of the assignedAsset document
+      const { assetId } = req.body; // The ID of the main asset (to increase stock)
+
+      // 1. Mark as returned in 'assignedAssets' collection
+      const filter = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: {
+          status: 'returned',
+          returnDate: new Date()
+        }
+      };
+
+      const result = await assignedAssetsCollection.updateOne(filter, updateDoc);
+
+      // 2. If successful, Increase Stock in 'assets' collection
+      if (result.modifiedCount > 0) {
+        const assetFilter = { _id: new ObjectId(assetId) };
+        const updateStock = {
+          $inc: { availableQuantity: 1 }
+        };
+        await assetsCollection.updateOne(assetFilter, updateStock);
+      }
+
+      res.send(result);
+    });
+
+    // ---------Payment-----------
+
+    // GET: Payment History for a specific HR
+    app.get('/payments/:email', verifyToken, async (req, res) => {
+      const query = { hrEmail: req.params.email };
+      const result = await paymentCollection.find(query).toArray();
+      res.send(result);
+    });
+
+    app.post('/create-checkout-session', verifyToken, async (req, res) => {
+      const { price, packageName, employeeLimit, hrEmail } = req.body;
+
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ['card'],
+        customer_email: hrEmail, // Auto-fill user email on Stripe
+        line_items: [
+          {
+            price_data: {
+              currency: 'usd',
+              product_data: {
+                name: `${packageName} Package`,
+                description: `Up to ${employeeLimit} employees`,
+              },
+              unit_amount: price * 100, // Amount in cents
+            },
+            quantity: 1,
+          },
+        ],
+        mode: 'payment',
+        // Redirect URLs (Frontend)
+        success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancel`,
+        // Save critical data in metadata so we can read it later
+        metadata: {
+          hrEmail,
+          packageName,
+          employeeLimit,
+          price
+        }
+      });
+
+      res.send({ sessionId: session.id, url: session.url });
+    });
+
+    app.post('/validate-payment', verifyToken, async (req, res) => {
+      const { sessionId } = req.body;
+      console.log(sessionId);
+      // A. Retrieve session from Stripe to verify it's actually paid
+      const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+      if (session.payment_status === 'paid') {
+        const { hrEmail, packageName, employeeLimit, price } = session.metadata;
+        const transactionId = session.payment_intent;
+
+        // B. Save Payment Info
+        const paymentData = {
+          hrEmail,
+          packageName,
+          employeeLimit: parseInt(employeeLimit),
+          amount: parseInt(price),
+          transactionId,
+          paymentDate: new Date(),
+          status: 'completed'
+        };
+
+        // Prevent duplicate entry (Optional check)
+        const alreadySaved = await paymentCollection.findOne({ transactionId });
+        if (alreadySaved) {
+          return res.send({ success: true, message: "Already saved" });
+        }
+
+        const paymentResult = await paymentCollection.insertOne(paymentData);
+
+        // C. Update User Limit
+        const updateDoc = {
+          $set: {
+            packageLimit: parseInt(employeeLimit),
+            subscription: packageName,
+            transactionId
+          }
+        };
+        const updateResult = await usersCollection.updateOne({ email: hrEmail }, updateDoc);
+
+        res.send({ success: true, paymentResult, updateResult });
+      } else {
+        res.status(400).send({ success: false, message: "Payment not verified" });
+      }
+    });
+
+
     // Get Packages
-    app.get('/packages', async(req,res)=>{
+    app.get('/packages', async (req, res) => {
 
       const result = await packageCollection.find().toArray()
       res.send(result)
     })
 
     // Get My Assets
-    app.get('/my-assets', async (req, res) => {
+    app.get('/my-assets', verifyToken, async (req, res) => {
       const { email, search, type } = req.query;
 
       // 1. Pagination Logic
