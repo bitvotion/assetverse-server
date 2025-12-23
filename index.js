@@ -31,7 +31,7 @@ app.get('/', (req, res) => {
 async function run() {
   try {
     // Connect to MongoDB but have to comment for vercel deploy
-    await client.connect();
+    // await client.connect();
 
     // ---Collections---
     const db = client.db("AssetVerse_DB")
@@ -51,8 +51,10 @@ async function run() {
         return res.status(401).send({ message: 'unauthorized access' })
       }
       const token = req.headers.authorization.split(' ')[1]
+      console.log(token);
       jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
         if (err) {
+          console.error(err);
           return res.status(401).send({ message: 'unauthorized access' })
         }
         req.decoded = decoded
@@ -83,8 +85,6 @@ async function run() {
 
     // User Related API
 
-    // Role checking ----VERIFYTOKEN Add korte hobe
-    
     app.get('/users/role/:email', verifyToken, async (req, res) => {
       const email = req.params.email
 
@@ -103,14 +103,11 @@ async function run() {
     app.post('/users', async (req, res) => {
       const userData = req.body
 
-      // Social Login Protection
       const query = { email: userData.email }
       const existingUser = await usersCollection.findOne(query)
       if (existingUser) {
         return res.send({ message: 'User already exists', insertedId: null })
       }
-
-      // Based on Role
 
       let newUser = {}
 
@@ -415,7 +412,7 @@ async function run() {
 
           // INSERT INTO assignedAssets COLLECTION
           const assignedAssetDoc = {
-            requestId: new ObjectId(id), // Link to original request
+            requestId: new ObjectId(id),
             assetId: new ObjectId(assetId),
             assetName: request.assetName,
             assetImage: request.assetImage,
@@ -425,7 +422,7 @@ async function run() {
             hrEmail: hrEmail,
             companyName: request.companyName,
             assignmentDate: new Date(),
-            returnDate: null, // null if not returned
+            returnDate: null,
             status: "assigned"
           }
 
@@ -472,7 +469,7 @@ async function run() {
           if (assetId) {
             const assetQuery = { _id: new ObjectId(assetId) }
             const updateAsset = {
-              $inc: { availableQuantity: -1 } // Or availableQuantity depending on your schema
+              $inc: { availableQuantity: -1 }
             }
             await assetsCollection.updateOne(assetQuery, updateAsset)
           }
@@ -644,12 +641,12 @@ async function run() {
       res.send(companies);
     });
 
-    // Return an Asset (PATCH Method)
+    // Return an Asset 
     app.patch('/assets/return/:id', verifyToken, async (req, res) => {
-      const { id } = req.params; // The ID of the assignedAsset document
-      const { assetId } = req.body; // The ID of the main asset (to increase stock)
+      const { id } = req.params;
+      const { assetId } = req.body;
 
-      // 1. Mark as returned in 'assignedAssets' collection
+      //  Mark as returned in 'assignedAssets' collection
       const filter = { _id: new ObjectId(id) };
       const updateDoc = {
         $set: {
@@ -660,7 +657,7 @@ async function run() {
 
       const result = await assignedAssetsCollection.updateOne(filter, updateDoc);
 
-      // 2. If successful, Increase Stock in 'assets' collection
+      //  If successful, Increase Stock in 'assets' collection
       if (result.modifiedCount > 0) {
         const assetFilter = { _id: new ObjectId(assetId) };
         const updateStock = {
@@ -686,7 +683,7 @@ async function run() {
 
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
-        customer_email: hrEmail, // Auto-fill user email on Stripe
+        customer_email: hrEmail,
         line_items: [
           {
             price_data: {
@@ -695,16 +692,16 @@ async function run() {
                 name: `${packageName} Package`,
                 description: `Up to ${employeeLimit} employees`,
               },
-              unit_amount: price * 100, // Amount in cents
+              unit_amount: price * 100,
             },
             quantity: 1,
           },
         ],
         mode: 'payment',
-        // Redirect URLs (Frontend)
+
         success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancel`,
-        // Save critical data in metadata so we can read it later
+
         metadata: {
           hrEmail,
           packageName,
@@ -716,17 +713,16 @@ async function run() {
       res.send({ sessionId: session.id, url: session.url });
     });
 
-    app.post('/validate-payment', verifyToken, async (req, res) => {
+    app.post('/validate-payment', async (req, res) => {
       const { sessionId } = req.body;
       console.log(sessionId);
-      // A. Retrieve session from Stripe to verify it's actually paid
+
       const session = await stripe.checkout.sessions.retrieve(sessionId);
 
       if (session.payment_status === 'paid') {
         const { hrEmail, packageName, employeeLimit, price } = session.metadata;
         const transactionId = session.payment_intent;
 
-        // B. Save Payment Info
         const paymentData = {
           hrEmail,
           packageName,
@@ -745,7 +741,7 @@ async function run() {
 
         const paymentResult = await paymentCollection.insertOne(paymentData);
 
-        // C. Update User Limit
+        //  Update User Limit
         const updateDoc = {
           $set: {
             packageLimit: parseInt(employeeLimit),
@@ -773,13 +769,12 @@ async function run() {
     app.get('/my-assets', verifyToken, async (req, res) => {
       const { email, search, type } = req.query;
 
-      // 1. Pagination Logic
+      //  Pagination Logic
       const page = parseInt(req.query.page) || 0;
       const limit = parseInt(req.query.limit) || 10;
       const skip = page * limit;
 
-      // 2. Build Query
-      // Strict Filter: Only show assets belonging to the logged-in employee
+      //  Build Query
       let query = { employeeEmail: email };
 
       // Search by Asset Name
@@ -792,18 +787,16 @@ async function run() {
         query.assetType = type;
       }
 
-      // Optional: Filter out returned items if you only want to show current assets
       // query.status = "assigned"; 
 
       try {
-        // 3. Fetch Data from 'assignedAssets' collection
+
         const result = await assignedAssetsCollection
           .find(query)
           .skip(skip)
           .limit(limit)
           .toArray();
 
-        // 4. Get Total Count (for Pagination)
         const count = await assignedAssetsCollection.countDocuments(query);
 
         res.send({ result, count });
@@ -815,10 +808,11 @@ async function run() {
 
 
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
+
+    // await client.db("admin").command({ ping: 1 });
+    // console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
-    // Ensures that the client will close when you finish/error
+
     // await client.close();
   }
 }
